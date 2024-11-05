@@ -52,18 +52,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Load environment variables
-api_key = settings.GRAPHRAG_API_KEY
+chat_api_key = settings.GRAPHRAG_API_KEY
+chat_api_base = settings.GRAPHRAG_API_BASE
+openai_api_version = settings.GRAPHRAG_OPENAI_API_VERSION
 llm_model = settings.GRAPHRAG_LLM_MODEL
+deployment_name = settings.GRAPHRAG_DEPLOYMENT_NAME
+
 embedding_model = settings.GRAPHRAG_EMBEDDING_MODEL
+embedding_api_key = settings.EMBEDDING_API_KEY
+embedding_api_base = settings.GRAPHRAG_EMBEDDING_API_BASE
+embedding_deployment_name = settings.EMBEDDING_DEPLOYMENT_NAME
+embedding_api_version = settings.EMBEDDING_API_VERSION
+
 claim_extraction_enabled = settings.GRAPHRAG_CLAIM_EXTRACTION_ENABLED
 
 llm = ChatOpenAI(
-    api_key=api_key,
+    api_key=chat_api_key,
+    api_base=chat_api_base,
+    api_version=openai_api_version,
+    deployment_name=deployment_name,
     model=llm_model,
-    api_type=OpenaiApiType.OpenAI,
-    max_retries=20,
+    api_type=OpenaiApiType.AzureOpenAI,
+    max_retries=20
 )
 
 token_encoder = tiktoken.get_encoding("cl100k_base")
@@ -71,22 +82,26 @@ token_encoder = tiktoken.get_encoding("cl100k_base")
 INPUT_DIR = settings.INPUT_DIR
 COMMUNITY_LEVEL = settings.COMMUNITY_LEVEL
 
+
 def load_parquet_files():
     entity_df = pd.read_parquet(f"{INPUT_DIR}/{ENTITY_TABLE}.parquet")
     entity_embedding_df = pd.read_parquet(f"{INPUT_DIR}/{ENTITY_EMBEDDING_TABLE}.parquet")
     report_df = pd.read_parquet(f"{INPUT_DIR}/{COMMUNITY_REPORT_TABLE}.parquet")
-    relationship_df = pd.read_parquet(f"{INPUT_DIR}/{RELATIONSHIP_TABLE}.parquet")    
-    covariate_df = pd.read_parquet(f"{INPUT_DIR}/{COVARIATE_TABLE}.parquet") if claim_extraction_enabled else pd.DataFrame()
+    relationship_df = pd.read_parquet(f"{INPUT_DIR}/{RELATIONSHIP_TABLE}.parquet")
+    covariate_df = pd.read_parquet(
+        f"{INPUT_DIR}/{COVARIATE_TABLE}.parquet") if claim_extraction_enabled else pd.DataFrame()
     text_unit_df = pd.read_parquet(f"{INPUT_DIR}/{TEXT_UNIT_TABLE}.parquet")
-    
+
     return entity_df, entity_embedding_df, report_df, relationship_df, covariate_df, text_unit_df
 
+
 entity_df, entity_embedding_df, report_df, relationship_df, covariate_df, text_unit_df = load_parquet_files()
+
 
 def setup_global_search():
     entities = read_indexer_entities(entity_df, entity_embedding_df, COMMUNITY_LEVEL)
     reports = read_indexer_reports(report_df, entity_df, COMMUNITY_LEVEL)
-    
+
     context_builder = GlobalCommunityContext(
         community_reports=reports,
         entities=entities,
@@ -126,6 +141,7 @@ def setup_global_search():
     )
     return search_engine
 
+
 def setup_local_search():
     entities = read_indexer_entities(entity_df, entity_embedding_df, COMMUNITY_LEVEL)
     relationships = read_indexer_relationships(relationship_df)
@@ -148,11 +164,12 @@ def setup_local_search():
         entity_text_embeddings=description_embedding_store,
         embedding_vectorstore_key=EntityVectorStoreKey.ID,
         text_embedder=OpenAIEmbedding(
-            api_key=api_key,
-            api_base=None,
-            api_type=OpenaiApiType.OpenAI,
+            api_key=embedding_api_key,
+            api_base=embedding_api_base,
+            api_version=embedding_api_version,
+            api_type=OpenaiApiType.AzureOpenAI,
             model=embedding_model,
-            deployment_name=embedding_model,
+            deployment_name=embedding_deployment_name,
             max_retries=20,
         ),
         token_encoder=token_encoder,
@@ -184,13 +201,15 @@ def setup_local_search():
     )
     return search_engine
 
+
 global_search_engine = setup_global_search()
 local_search_engine = setup_local_search()
+
 
 @app.get("/search/global")
 async def global_search(query: str = Query(..., description="Search query for global context")):
     try:
-        result = await global_search_engine.asearch(query)        
+        result = await global_search_engine.asearch(query)
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
@@ -206,21 +225,23 @@ async def global_search(query: str = Query(..., description="Search query for gl
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/search/local")
 async def local_search(query: str = Query(..., description="Search query for local context")):
     try:
-        result = await local_search_engine.asearch(query)        
+        result = await local_search_engine.asearch(query)
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
             "context_text": result.context_text,
             "completion_time": result.completion_time,
             "llm_calls": result.llm_calls,
-            "prompt_tokens": result.prompt_tokens,            
+            "prompt_tokens": result.prompt_tokens,
         }
         return JSONResponse(content=response_dict)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/status")
 async def status():
@@ -229,4 +250,5 @@ async def status():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
